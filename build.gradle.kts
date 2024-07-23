@@ -283,7 +283,7 @@ if (mavenUsername?.isNotBlank() == true && mavenPassword?.isNotBlank() == true) 
             register<MavenPublication>("maven") {
                 from(components.getByName("java"))
 
-                artifactId = rootProject.name.lowercase()
+                artifactId = "legacy-crafty-crashes"
             }
         }
 
