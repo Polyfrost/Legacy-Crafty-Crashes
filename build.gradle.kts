@@ -58,7 +58,7 @@ loom {
         runConfigs {
             "client" {
                 property("mixin.debug.export", "true") // Outputs all mixin changes to `versions/{mcVersion}/run/.mixin.out/class`
-                property("fml.coreMods.load", "org.polyfrost.craftycrashes.plugin.LegacyCraftyCrashesLoadingPlugin")
+                programArgs("--tweakClass", "org.spongepowered.asm.launch.MixinTweaker")
             }
         }
     }
@@ -77,7 +77,7 @@ val shade: Configuration by configurations.creating {
     configurations.api.get().extendsFrom(this)
 }
 
-val implementationNoPom: Configuration by configurations.creating {
+val shadeNoPom: Configuration by configurations.creating {
     configurations.named(JavaPlugin.COMPILE_CLASSPATH_CONFIGURATION_NAME) { extendsFrom(this@creating) }
     configurations.named(JavaPlugin.RUNTIME_CLASSPATH_CONFIGURATION_NAME) { extendsFrom(this@creating) }
 }
@@ -96,9 +96,11 @@ repositories {
 
 // Configures the libraries/dependencies for your mod.
 dependencies {
-    implementationNoPom("org.spongepowered:mixin:0.7.11-SNAPSHOT")
+    shadeNoPom("org.spongepowered:mixin:0.7.11-SNAPSHOT") {
+        isTransitive = false
+    }
 
-    shade("it.unimi.dsi:fastutil:8.3.1")
+    shade("it.unimi.dsi:fastutil:8.5.13")
 }
 
 tasks {
@@ -150,7 +152,6 @@ tasks {
     }
 
     withType(Jar::class) {
-
         // This removes the 10th line in mixins.legacycraftycrashes.json,
         // aka the test mixin
         doFirst {
@@ -239,7 +240,7 @@ tasks {
     shadowJar {
         from(remapJar)
         archiveClassifier.set("mod")
-        configurations = listOf(shade)
+        configurations = listOf(shade, shadeNoPom)
         duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     }
 
@@ -257,8 +258,7 @@ tasks {
             "ForceLoadAsMod" to true, // We want to load this jar as a mod, so we force Forge to do so.
             "TweakOrder" to "0", // Makes sure that the OneConfig launch wrapper is loaded as soon as possible.
             "MixinConfigs" to "mixins.${mod_id}.json", // We want to use our mixin configuration, so we specify it here.
-            "FMLCorePlugin" to "org.polyfrost.craftycrashes.plugin.CraftyCrashesLoadingPlugin",
-            "FMLCorePluginContainsFMLMod" to "yes"
+            "TweakClass" to "org.spongepowered.asm.launch.MixinTweaker", // We want to use mixins, so we specify the MixinTweaker here.
         )
         archiveClassifier.set("dev")
     }
