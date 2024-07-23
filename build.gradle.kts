@@ -2,11 +2,12 @@
 
 import org.polyfrost.gradle.util.noServerRunConfigs
 import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+import java.util.concurrent.atomic.AtomicReference
 
 // Adds support for kotlin, and adds the Polyfrost Gradle Toolkit
 // which we use to prepare the environment.
 plugins {
-    kotlin("jvm")
+    kotlin("jvm") apply false
     id("org.polyfrost.multi-version")
     id("org.polyfrost.defaults.repo")
     id("org.polyfrost.defaults.java")
@@ -14,6 +15,7 @@ plugins {
     id("com.github.johnrengelman.shadow")
     id("net.kyori.blossom") version "1.3.2"
     id("signing")
+    `maven-publish`
     java
 }
 
@@ -39,7 +41,11 @@ group = "org.polyfrost"
 // Sets the name of the output jar (the one you put in your mods folder and send to other people)
 // It outputs all versions of the mod into the `versions/{mcVersion}/build` directory.
 base {
-    archivesName.set("$mod_archives_name-$platform")
+    archivesName.set(mod_archives_name)
+}
+
+java {
+    withSourcesJar()
 }
 
 // Configures Polyfrost Loom, our plugin fork to easily set up the programming environment.
@@ -51,8 +57,8 @@ loom {
     if (project.platform.isLegacyForge) {
         runConfigs {
             "client" {
-                programArgs("--tweakClass", "cc.polyfrost.oneconfig.loader.stage0.LaunchWrapperTweaker")
                 property("mixin.debug.export", "true") // Outputs all mixin changes to `versions/{mcVersion}/run/.mixin.out/class`
+                property("fml.coreMods.load", "org.polyfrost.craftycrashes.plugin.LegacyCraftyCrashesLoadingPlugin")
             }
         }
     }
@@ -68,10 +74,12 @@ loom {
 
 // Creates the shade/shadow configuration, so we can include libraries inside our mod, rather than having to add them separately.
 val shade: Configuration by configurations.creating {
-    configurations.implementation.get().extendsFrom(this)
+    configurations.api.get().extendsFrom(this)
 }
-val modShade: Configuration by configurations.creating {
-    configurations.modImplementation.get().extendsFrom(this)
+
+val implementationNoPom: Configuration by configurations.creating {
+    configurations.named(JavaPlugin.COMPILE_CLASSPATH_CONFIGURATION_NAME) { extendsFrom(this@creating) }
+    configurations.named(JavaPlugin.RUNTIME_CLASSPATH_CONFIGURATION_NAME) { extendsFrom(this@creating) }
 }
 
 // Configures the output directory for when building from the `src/resources` directory.
@@ -88,20 +96,14 @@ repositories {
 
 // Configures the libraries/dependencies for your mod.
 dependencies {
-    // Adds the OneConfig library, so we can develop with it.
-    modCompileOnly("cc.polyfrost:oneconfig-$platform:0.2.2-alpha+")
+    implementationNoPom("org.spongepowered:mixin:0.7.11-SNAPSHOT")
 
-    // Adds DevAuth, which we can use to log in to Minecraft in development.
-    modRuntimeOnly("me.djtheredstoner:DevAuth-${if (platform.isFabric) "fabric" else if (platform.isLegacyForge) "forge-legacy" else "forge-latest"}:1.2.0")
-
-    // If we are building for legacy forge, includes the launch wrapper with `shade` as we configured earlier, as well as mixin 0.7.11
-    if (platform.isLegacyForge) {
-        compileOnly("org.spongepowered:mixin:0.7.11-SNAPSHOT")
-        shade("cc.polyfrost:oneconfig-wrapper-launchwrapper:1.0.0-beta+")
-    }
+    shade("it.unimi.dsi:fastutil:8.3.1")
 }
 
 tasks {
+    val atomicLines = AtomicReference(listOf<String>())
+    val atomicRefmapLines = AtomicReference(listOf<String>())
     // Processes the `src/resources/mcmod.info`, `fabric.mod.json`, or `mixins.${mod_id}.json` and replaces
     // the mod id, name and version with the ones in `gradle.properties`
     processResources {
@@ -147,8 +149,79 @@ tasks {
         }
     }
 
-    // Configures the resources to include if we are building for forge or fabric.
-    withType(Jar::class.java) {
+    withType(Jar::class) {
+
+        // This removes the 10th line in mixins.legacycraftycrashes.json,
+        // aka the test mixin
+        doFirst {
+            val mixinJson = layout.buildDirectory.asFile.get().resolve("classes")
+                .resolve("java")
+                .resolve("main")
+                .resolve("mixins.${mod_id}.json")
+            if (mixinJson.exists()) {
+                val lines = mixinJson.readLines()
+                if (lines[9].contains("_Test")) {
+                    atomicLines.set(lines)
+                    mixinJson.delete()
+                    mixinJson.writeText(
+                        lines.subList(0, 9).joinToString("\n").substringBeforeLast(",") + "\n" + lines.subList(
+                            10,
+                            lines.size
+                        ).joinToString("\n")
+                    )
+                }
+            }
+            val refmapJson = layout.buildDirectory.asFile.get().resolve("classes")
+                .resolve("java")
+                .resolve("main")
+                .resolve("mixins.${mod_id}.refmap.json")
+            if (refmapJson.exists()) {
+                // Remove lines 3-5, and lines 15-17
+                val lines = refmapJson.readLines()
+                if (lines[2].contains("_Test")) {
+                    atomicRefmapLines.set(lines)
+                    refmapJson.delete()
+                    refmapJson.writeText(
+                        lines.subList(0, 2).joinToString("\n") + "\n" + lines.subList(5, 14).joinToString("\n") + "\n" + lines.subList(
+                            17,
+                            lines.size
+                        ).joinToString("\n")
+                    )
+                }
+            }
+        }
+
+        doLast {
+            val lines = atomicLines.get()
+            val refmapLines = atomicRefmapLines.get()
+            if (lines.isNotEmpty()) {
+                val mixinJson = layout.buildDirectory.asFile.get().resolve("classes")
+                    .resolve("java")
+                    .resolve("main")
+                    .resolve("mixins.${mod_id}.json")
+                if (mixinJson.exists()) {
+                    mixinJson.delete()
+                    mixinJson.writeText(lines.joinToString("\n"))
+                }
+            }
+            if (refmapLines.isNotEmpty()) {
+                val refmapJson = layout.buildDirectory.asFile.get().resolve("classes")
+                    .resolve("java")
+                    .resolve("main")
+                    .resolve("mixins.${mod_id}.refmap.json")
+
+                if (refmapJson.exists()) {
+                    refmapJson.delete()
+                    refmapJson.writeText(refmapLines.joinToString("\n"))
+                }
+            }
+        }
+
+        if (!name.contains("sourcesjar", ignoreCase = true) || !name.contains("javadoc", ignoreCase = true)) {
+            exclude("**/**_Test.**")
+            exclude("**/**_Test$**.**")
+        }
+
         if (project.platform.isFabric) {
             exclude("mcmod.info", "mods.toml")
         } else {
@@ -163,30 +236,65 @@ tasks {
 
     // Configures our shadow/shade configuration, so we can
     // include some dependencies within our mod jar file.
-    named<ShadowJar>("shadowJar") {
-        archiveClassifier.set("dev")
-        configurations = listOf(shade, modShade)
+    shadowJar {
+        from(remapJar)
+        archiveClassifier.set("mod")
+        configurations = listOf(shade)
         duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     }
 
     remapJar {
-        inputFile.set(shadowJar.get().archiveFile)
         archiveClassifier.set("")
     }
 
-    jar {
-        // Sets the jar manifest attributes.
-        if (platform.isLegacyForge) {
-            manifest.attributes += mapOf(
-                "ModSide" to "CLIENT", // We aren't developing a server-side mod
-                "ForceLoadAsMod" to true, // We want to load this jar as a mod, so we force Forge to do so.
-                "TweakOrder" to "0", // Makes sure that the OneConfig launch wrapper is loaded as soon as possible.
-                "MixinConfigs" to "mixins.${mod_id}.json", // We want to use our mixin configuration, so we specify it here.
-                "TweakClass" to "cc.polyfrost.oneconfig.loader.stage0.LaunchWrapperTweaker" // Loads the OneConfig launch wrapper.
-            )
-        }
+    assemble {
         dependsOn(shadowJar)
-        archiveClassifier.set("")
-        enabled = false
+    }
+
+    jar {
+        manifest.attributes += mapOf(
+            "ModSide" to "CLIENT", // We aren't developing a server-side mod
+            "ForceLoadAsMod" to true, // We want to load this jar as a mod, so we force Forge to do so.
+            "TweakOrder" to "0", // Makes sure that the OneConfig launch wrapper is loaded as soon as possible.
+            "MixinConfigs" to "mixins.${mod_id}.json", // We want to use our mixin configuration, so we specify it here.
+            "FMLCorePlugin" to "org.polyfrost.craftycrashes.plugin.CraftyCrashesLoadingPlugin",
+            "FMLCorePluginContainsFMLMod" to "yes"
+        )
+        archiveClassifier.set("dev")
+    }
+}
+
+afterEvaluate {
+    val configuration = configurations.getByName("shadowRuntimeElements")
+    val jarTask = tasks.getByName("shadowJar") as ShadowJar
+    for (artifact in configuration.artifacts) {
+        if (artifact.file.absolutePath == jarTask.archiveFile.get().asFile.absolutePath && artifact.buildDependencies.getDependencies(null).contains(jarTask)) {
+            configuration.artifacts.remove(artifact)
+        }
+    }
+}
+
+val mavenUsername = findProperty("polyfrost.publishing.maven.username")?.toString()
+val mavenPassword = findProperty("polyfrost.publishing.maven.password")?.toString()
+
+if (mavenUsername?.isNotBlank() == true && mavenPassword?.isNotBlank() == true) {
+    extensions.configure<PublishingExtension>("publishing") {
+        publications {
+            register<MavenPublication>("maven") {
+                from(components.getByName("java"))
+
+                artifactId = rootProject.name.lowercase()
+            }
+        }
+
+        repositories {
+            maven("https://repo.polyfrost.org/releases") {
+                name = "releases"
+                credentials {
+                    this@credentials.username = mavenUsername
+                    this@credentials.password = mavenPassword
+                }
+            }
+        }
     }
 }

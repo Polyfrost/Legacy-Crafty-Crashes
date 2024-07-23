@@ -1,0 +1,13 @@
+{
+  "compatibilityLevel": "JAVA_8",
+  "minVersion": "0.7",
+  "package": "org.polyfrost.craftycrashes.mixin",
+  "plugin": "org.polyfrost.craftycrashes.Extension",
+  "refmap": "mixins.${id}.refmap.json",
+  "client": [
+    "CrashReportMixin",
+    "CrashReportCategoryMixin",
+    "MinecraftMixin_Test"
+  ],
+  "verbose": true
+}
